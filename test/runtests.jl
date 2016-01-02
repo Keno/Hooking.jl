@@ -16,7 +16,7 @@ ccall(:jl_,Void,(Any,),Hooking.hook)
 # Now test proper return
 didrun = false
 Hooking.hook(addr) do hook, RC
-    didrun = true
+    global didrun = true
 end
 ccall(:jl_,Void,(Any,),Hooking.hook)
 @test didrun

@@ -137,10 +137,7 @@ function __init__()
         addr_bytes = reinterpret(UInt8,[ret_addr])
         resume_data = [
             resume_instructions...,
-            # We need to counteract the pushq rax we did below, but
-            # the return code pushes the rip on the stack. If we ever change
-            # that, we need:
-            # 0x48, 0x83, 0xc4, 0x08, # addq $8, %rsp
+            0x48, 0x83, 0xc4, 0x10, # addq $16, %rsp
             # Is this a good idea? Probably not
             hook.orig_data...,
             0x66, 0x68, addr_bytes[7:8]...,
