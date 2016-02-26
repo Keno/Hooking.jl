@@ -77,6 +77,7 @@ const RC_SIZE = 20*8
 immutable RegisterContext
     data::Array{UInt}
 end
+get_ip(RC::RegisterContext) = RC.data[RegisterMap[:rip]]-14
 
 # Actual hooking
 
@@ -130,7 +131,7 @@ function __init__()
     function callback(x::Ptr{Void})
         RC = RegisterContext(reinterpret(UInt,
             copy(pointer_to_array(convert(Ptr{UInt8}, x), (RC_SIZE,), false))))
-        hook_addr = RC.data[RegisterMap[:rip]]-13
+        hook_addr = RC.data[RegisterMap[:rip]]-14
         hook = hooks[reinterpret(Ptr{Void},hook_addr)]
         hook.callback(hook, RC)
         ret_addr = hook_addr+length(hook.orig_data)
@@ -199,8 +200,17 @@ function hook(callback::Function, addr)
         triple, C_NULL, 0, C_NULL, C_NULL)
     @assert DC != C_NULL
 
+
+    hook_asm_template = [
+        0xcc;
+        0x50; #pushq   %rax
+        # movq $hookto, %rax
+        0x48; 0xb8; reinterpret(UInt8, [thehook]);
+        0xff; 0xd0; #callq *%rax
+    ]
+
     nbytes = 0
-    while nbytes < 13
+    while nbytes < length(hook_asm_template)
         outs = Ref{UInt8}()
         nbytes += ccall(:LLVMDisasmInstruction, Csize_t,
             (Ptr{Void}, Ptr{UInt8}, Csize_t, UInt64, Ptr{UInt8}, Csize_t),
@@ -217,14 +227,7 @@ function hook(callback::Function, addr)
     dest = pointer_to_array(convert(Ptr{UInt8}, addr), (nbytes,), false)
     orig_data = copy(dest)
 
-    hook_asm =
-    [
-        0x50; #pushq   %rax
-        # movq $hookto, %rax
-        0x48; 0xb8; reinterpret(UInt8, [thehook]);
-        0xff; 0xd0; #jmpq %rax
-        zeros(UInt8,nbytes-13)# Pad to nbytes
-    ]
+    hook_asm = [ hook_asm_template; zeros(UInt8,nbytes-length(hook_asm_template)) ]# Pad to nbytes
 
     allow_writing(to_page(addr,nbytes)) do
         dest[:] = hook_asm
@@ -232,6 +235,14 @@ function hook(callback::Function, addr)
 
     hooks[addr] = Hook(addr,orig_data,callback)
 end
+
+function get_function_addr(f, t)
+    t = Base.to_tuple_type(t)
+    llvmf = ccall(:jl_get_llvmf, Ptr{Void}, (Any, Any, Bool, Bool), f, t, false, true)
+    reinterpret(Ptr{Void},ccall(:jl_get_llvm_fptr, UInt64, (Ptr{Void},), llvmf))
+end
+
+hook(callback, f, t) = hook(callback, get_function_addr(f, t))
 
 function unhook(addr)
     hook = pop!(hooks, addr)
@@ -244,5 +255,7 @@ function unhook(addr)
         dest[:] = hook.orig_data
     end
 end
+
+include("backtraces.jl")
 
 end # module

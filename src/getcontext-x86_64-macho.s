@@ -30,7 +30,7 @@ movq    %r13,104(%rsp)
 movq    %r14,112(%rsp)
 movq    %r15,120(%rsp)
 movq    136(%rsp),%rsi
-movq    %rsi,128(%rsp) # store return address as r
+movq    %rsi,128(%rsp) # store return address as rip
 movq    %rsp,    %rdi
 pushq   %rsi           # Makes the debugger's life easier
 movq _hooking_jl_callback@GOTPCREL(%rip), %rax
