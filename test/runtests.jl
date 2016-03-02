@@ -2,6 +2,7 @@ using Hooking
 using Base.Test
 
 addr = cglobal(:jl_)
+# Test error return
 Hooking.hook(addr) do hook, RC
     error()
 end

@@ -169,7 +169,6 @@ function __init__()
        ret i8* %addr
        """),Ptr{UInt8},Tuple{})))
 end
-__init__()
 
 # High Level Implementation
 
@@ -182,7 +181,7 @@ __init__()
 function allow_writing(f, region)
     # On OS X, make sure that the page is mapped as COW
     @osx_only mach_check(
-        mach_vm_protect(region, VM_PROT_READ | VM_PROT_WRITE))
+        mach_vm_protect(region, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE))
     @linux_only mprotect(region, PROT_READ | PROT_WRITE)
     f()
     @osx_only mach_check(
@@ -221,7 +220,6 @@ function hook(callback::Function, addr)
             outs, 1      # OutString
             )
     end
-    @show nbytes
 
     # Record the instructions that were there originally
     dest = pointer_to_array(convert(Ptr{UInt8}, addr), (nbytes,), false)
