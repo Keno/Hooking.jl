@@ -65,6 +65,19 @@ region_to_array(region::MemoryRegion) =
 
 end
 
+@linux_only begin
+    to_page(addr, size) = (@assert size <= 4096;
+        MemoryRegion(addr-(reinterpret(UInt, addr)%4096),1))
+        
+    mprotect(region, flags) = ccall(:mprotect, Cint,
+        (Ptr{Void}, Csize_t, Cint), region.addr, region.size, flags)
+        
+    const PROT_READ	 =  0x1
+    const PROT_WRITE =  0x2
+    const PROT_EXEC	 =  0x4
+    const PROT_NONE	 =  0x0
+end
+
 # Register save implementation
 
 const RegisterMap = Dict(
@@ -92,7 +105,7 @@ hooks = Dict{Ptr{Void},Hook}()
 
 # The text section of jumpto-x86_64-macho.o
 const resume_instructions = [
-    0xcc, 0x48, 0x8b, 0x47, 0x38, 0x48, 0x83, 0xe8, 0x10, 0x48, 0x89, 0x47,
+    0x90, 0x48, 0x8b, 0x47, 0x38, 0x48, 0x83, 0xe8, 0x10, 0x48, 0x89, 0x47,
     0x38, 0x48, 0x8b, 0x5f, 0x20, 0x48, 0x89, 0x18, 0x48, 0x8b, 0x9f, 0x80,
     0x00, 0x00, 0x00, 0x48, 0x89, 0x58, 0x08, 0x48, 0x8b, 0x07, 0x48, 0x8b,
     0x5f, 0x08, 0x48, 0x8b, 0x4f, 0x10, 0x48, 0x8b, 0x57, 0x18, 0x48, 0x8b,
@@ -101,6 +114,41 @@ const resume_instructions = [
     0x67, 0x60, 0x4c, 0x8b, 0x6f, 0x68, 0x4c, 0x8b, 0x77, 0x70, 0x4c, 0x8b,
     0x7f, 0x78, 0x48, 0x8b, 0x67, 0x38, 0x5f
 ]
+
+# Split this out to avoid constructing a gc frame in the callback directly
+@noinline function _callback(x::Ptr{Void})
+    RC = RegisterContext(reinterpret(UInt,
+        copy(pointer_to_array(convert(Ptr{UInt8}, x), (RC_SIZE,), false))))
+    hook_addr = RC.data[RegisterMap[:rip]]-14
+    hook = hooks[reinterpret(Ptr{Void},hook_addr)]
+    hook.callback(hook, RC)
+    ret_addr = hook_addr+length(hook.orig_data)
+    addr_bytes = reinterpret(UInt8,[ret_addr])
+    resume_data = [
+        resume_instructions...,
+        0x48, 0x83, 0xc4, 0x10, # addq $16, %rsp
+        # Is this a good idea? Probably not
+        hook.orig_data...,
+        0x66, 0x68, addr_bytes[7:8]...,
+        0x66, 0x68, addr_bytes[5:6]...,
+        0x66, 0x68, addr_bytes[3:4]...,
+        0x66, 0x68, addr_bytes[1:2]...,
+        0xc3
+    ]
+    callback_rwx[1:length(resume_data)] = resume_data
+
+    # invalidate instruction cache here if ever ported to other
+    # architectures
+
+    ptr = convert(Ptr{Void},pointer(callback_rwx))::Ptr{Void}
+    ptr, pointer(RC.data)::Ptr{UInt64}
+end
+function callback(x::Ptr{Void})
+    x = _callback(x)
+    # jump to resume code
+    ccall(x[1],Void,(Ptr{Void},),x[2])
+    nothing
+end
 
 function __init__()
     # First initialize the disassembler
@@ -128,44 +176,24 @@ function __init__()
             VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE))
         region_to_array(region)
     end
-    function callback(x::Ptr{Void})
-        RC = RegisterContext(reinterpret(UInt,
-            copy(pointer_to_array(convert(Ptr{UInt8}, x), (RC_SIZE,), false))))
-        hook_addr = RC.data[RegisterMap[:rip]]-14
-        hook = hooks[reinterpret(Ptr{Void},hook_addr)]
-        hook.callback(hook, RC)
-        ret_addr = hook_addr+length(hook.orig_data)
-        addr_bytes = reinterpret(UInt8,[ret_addr])
-        resume_data = [
-            resume_instructions...,
-            0x48, 0x83, 0xc4, 0x10, # addq $16, %rsp
-            # Is this a good idea? Probably not
-            hook.orig_data...,
-            0x66, 0x68, addr_bytes[7:8]...,
-            0x66, 0x68, addr_bytes[5:6]...,
-            0x66, 0x68, addr_bytes[3:4]...,
-            0x66, 0x68, addr_bytes[1:2]...,
-            0xc3
-        ]
-        callback_rwx[1:length(resume_data)] = resume_data
-
-        # invalidate instruction cache here if ever ported to other
-        # architectures
-
-        # jump to resume code
-        ptr = convert(Ptr{Void},pointer(callback_rwx))
-        ccall(ptr,Void,(Ptr{Void},),RC.data)
-        nothing
+    callback_rwx = @linux_only begin
+        region = MemoryRegion(ccall(:mmap, Ptr{Void}, 
+            (Ptr{Void}, Csize_t, Cint, Cint, Cint, Csize_t),
+            C_NULL, 4096, PROT_EXEC | PROT_READ | PROT_WRITE,
+            Base.Mmap.MAP_ANONYMOUS | Base.Mmap.MAP_PRIVATE,
+            -1, 0), 4096)
+        Base.systemerror("mmap", reinterpret(Int, region.addr) == -1)
+        region_to_array(region)
     end
-    Base.ccallable(callback,Void,Tuple{Ptr{Void}},:hooking_jl_callback)
+    Base.ccallable(callback,Void,Tuple{Ptr{Void}},:_hooking_jl_callback)
     # Need to guarantee this is compiled after the above is loaded
     eval(:(ccall(:jl_load_object_file,Void,(Ptr{UInt8},),
             $(joinpath(here,"machohook.o")))))
     thehook = eval(:(
         llvmcall(
-       (""" declare void @hooking_jl_savecontext()""",
+       (""" declare void @_hooking_jl_savecontext()""",
        """
-       %addr = bitcast void ()* @hooking_jl_savecontext to i8*
+       %addr = bitcast void ()* @_hooking_jl_savecontext to i8*
        ret i8* %addr
        """),Ptr{UInt8},Tuple{})))
 end
@@ -182,7 +210,7 @@ function allow_writing(f, region)
     # On OS X, make sure that the page is mapped as COW
     @osx_only mach_check(
         mach_vm_protect(region, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE))
-    @linux_only mprotect(region, PROT_READ | PROT_WRITE)
+    @linux_only mprotect(region, PROT_READ | PROT_WRITE | PROT_EXEC) 
     f()
     @osx_only mach_check(
         mach_vm_protect(region, VM_PROT_EXECUTE | VM_PROT_READ))
@@ -201,7 +229,7 @@ function hook(callback::Function, addr)
 
 
     hook_asm_template = [
-        0xcc;
+        0x90; #0xcc;
         0x50; #pushq   %rax
         # movq $hookto, %rax
         0x48; 0xb8; reinterpret(UInt8, [thehook]);
