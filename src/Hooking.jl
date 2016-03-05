@@ -78,14 +78,21 @@ end
     const PROT_NONE	 =  0x0
 end
 
+include("backtraces.jl")
+
 # Register save implementation
 
-const RegisterMap = Dict(
+@osx_only const RegisterMap = Dict(
     :rsp => 8,
     :rip => 17
 )
 
-const RC_SIZE = 20*8
+@linux_only const RegisterMap = Dict(
+    :rip => div(UC_MCONTEXT_GREGS_RIP,sizeof(Ptr{Void}))+1
+)
+
+@osx_only const RC_SIZE = 20*8
+@linux_only const RC_SIZE = 0xb0
 
 immutable RegisterContext
     data::Array{UInt}
@@ -104,19 +111,12 @@ using Base.llvmcall
 hooks = Dict{Ptr{Void},Hook}()
 
 # The text section of jumpto-x86_64-macho.o
-const resume_instructions = [
-    0x90, 0x48, 0x8b, 0x47, 0x38, 0x48, 0x83, 0xe8, 0x10, 0x48, 0x89, 0x47,
-    0x38, 0x48, 0x8b, 0x5f, 0x20, 0x48, 0x89, 0x18, 0x48, 0x8b, 0x9f, 0x80,
-    0x00, 0x00, 0x00, 0x48, 0x89, 0x58, 0x08, 0x48, 0x8b, 0x07, 0x48, 0x8b,
-    0x5f, 0x08, 0x48, 0x8b, 0x4f, 0x10, 0x48, 0x8b, 0x57, 0x18, 0x48, 0x8b,
-    0x77, 0x28, 0x48, 0x8b, 0x6f, 0x30, 0x4c, 0x8b, 0x47, 0x40, 0x4c, 0x8b,
-    0x4f, 0x48, 0x4c, 0x8b, 0x57, 0x50, 0x4c, 0x8b, 0x5f, 0x58, 0x4c, 0x8b,
-    0x67, 0x60, 0x4c, 0x8b, 0x6f, 0x68, 0x4c, 0x8b, 0x77, 0x70, 0x4c, 0x8b,
-    0x7f, 0x78, 0x48, 0x8b, 0x67, 0x38, 0x5f
-]
+@osx_only const resume_length = 91
+@linux_only const resume_length = 0x71
 
 # Split this out to avoid constructing a gc frame in the callback directly
 @noinline function _callback(x::Ptr{Void})
+    @show x
     RC = RegisterContext(reinterpret(UInt,
         copy(pointer_to_array(convert(Ptr{UInt8}, x), (RC_SIZE,), false))))
     hook_addr = RC.data[RegisterMap[:rip]]-14
@@ -126,7 +126,8 @@ const resume_instructions = [
     addr_bytes = reinterpret(UInt8,[ret_addr])
     resume_data = [
         resume_instructions...,
-        0x48, 0x83, 0xc4, 0x10, # addq $16, %rsp
+        # Counteract the pushq %rip in the resume code
+        0x48, 0x83, 0xc4, 0x8, # addq $8, %rsp
         # Is this a good idea? Probably not
         hook.orig_data...,
         0x66, 0x68, addr_bytes[7:8]...,
@@ -144,9 +145,9 @@ const resume_instructions = [
     ptr, pointer(RC.data)::Ptr{UInt64}
 end
 function callback(x::Ptr{Void})
-    x = _callback(x)
+    ptr, data = _callback(x)
     # jump to resume code
-    ccall(x[1],Void,(Ptr{Void},),x[2])
+    ccall(ptr,Void,(Ptr{Void},),data)
     nothing
 end
 
@@ -159,8 +160,9 @@ function __init__()
     global resume
     global thehook
     global callback_rwx
+    global resume_instructions
     here = dirname(@__FILE__)
-    ccall(:jl_load_object_file,Void,(Ptr{UInt8},),joinpath(here,"machojump.o"))
+    ccall(:jl_load_object_file,Void,(Ptr{UInt8},),joinpath(here,"elfjump.o"))
     function resume(RC::RegisterContext)
         llvmcall(
         (""" declare void @hooking_jl_jumpto(i8*)""",
@@ -169,6 +171,15 @@ function __init__()
         ret void
         """),Void,Tuple{Ptr{UInt8}},pointer(RC.data))
     end
+    theresume = eval(:(
+        llvmcall(
+       (""" declare void @hooking_jl_jumpto()""",
+       """
+       %addr = bitcast void ()* @hooking_jl_jumpto to i8*
+       ret i8* %addr
+       """),Ptr{UInt8},Tuple{})))
+    resume_instructions = pointer_to_array(convert(Ptr{UInt8}, theresume),
+        (resume_length,), false)
     # Allocate an RWX page for the callback return
     callback_rwx = @osx_only begin
         region = mach_check(mach_vm_allocate(4096)...)
@@ -185,15 +196,15 @@ function __init__()
         Base.systemerror("mmap", reinterpret(Int, region.addr) == -1)
         region_to_array(region)
     end
-    Base.ccallable(callback,Void,Tuple{Ptr{Void}},:_hooking_jl_callback)
+    Base.ccallable(callback,Void,Tuple{Ptr{Void}},:hooking_jl_callback)
     # Need to guarantee this is compiled after the above is loaded
     eval(:(ccall(:jl_load_object_file,Void,(Ptr{UInt8},),
-            $(joinpath(here,"machohook.o")))))
+            $(joinpath(here,OS_NAME == :Darwin ? "machohook.o" : "elfhook.o")))))
     thehook = eval(:(
         llvmcall(
-       (""" declare void @_hooking_jl_savecontext()""",
+       (""" declare void @hooking_jl_savecontext()""",
        """
-       %addr = bitcast void ()* @_hooking_jl_savecontext to i8*
+       %addr = bitcast void ()* @hooking_jl_savecontext to i8*
        ret i8* %addr
        """),Ptr{UInt8},Tuple{})))
 end
@@ -209,7 +220,7 @@ end
 function allow_writing(f, region)
     # On OS X, make sure that the page is mapped as COW
     @osx_only mach_check(
-        mach_vm_protect(region, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE))
+        mach_vm_protect(region, VM_PROT_READ | VM_PROT_WRITE))
     @linux_only mprotect(region, PROT_READ | PROT_WRITE | PROT_EXEC) 
     f()
     @osx_only mach_check(
@@ -248,6 +259,7 @@ function hook(callback::Function, addr)
             outs, 1      # OutString
             )
     end
+    @show nbytes
 
     # Record the instructions that were there originally
     dest = pointer_to_array(convert(Ptr{UInt8}, addr), (nbytes,), false)
@@ -263,8 +275,9 @@ function hook(callback::Function, addr)
 end
 
 function get_function_addr(f, t)
-    t = Base.to_tuple_type(t)
+    t = Tuple{typeof(f), Base.to_tuple_type(t).parameters...}
     llvmf = ccall(:jl_get_llvmf, Ptr{Void}, (Any, Any, Bool, Bool), f, t, false, true)
+    @assert llvmf != 0
     reinterpret(Ptr{Void},ccall(:jl_get_llvm_fptr, UInt64, (Ptr{Void},), llvmf))
 end
 
@@ -281,7 +294,5 @@ function unhook(addr)
         dest[:] = hook.orig_data
     end
 end
-
-include("backtraces.jl")
 
 end # module

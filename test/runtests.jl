@@ -26,7 +26,8 @@ bigfib(n) = ((BigInt[1 1; 1 0])^n)[2,1]
 
 Hooking.hook(bigfib, Tuple{Int}) do hook, RC
     for ip in Hooking.rec_backtrace(RC)
-        @show ccall(:jl_lookup_code_address, Any, (Ptr{Void}, Cint), ip-1, 0)
+        @show (ccall(:jl_lookup_code_address, Any, (Ptr{Void}, Cint),
+            reinterpret(Ptr{Void},ip-1), 0))[1]
     end
     println("test")
 end
