@@ -110,26 +110,35 @@ end
 using Base.llvmcall
 hooks = Dict{Ptr{Void},Hook}()
 
+immutable Deopt
+    addr::Ptr{Void}
+end
+
 # The text section of jumpto-x86_64-macho.o
 @osx_only const resume_length = 91
 @linux_only const resume_length = 0x71
 
 # Split this out to avoid constructing a gc frame in the callback directly
 @noinline function _callback(x::Ptr{Void})
-    @show x
     RC = RegisterContext(reinterpret(UInt,
         copy(pointer_to_array(convert(Ptr{UInt8}, x), (RC_SIZE,), false))))
     hook_addr = RC.data[RegisterMap[:rip]]-14
     hook = hooks[reinterpret(Ptr{Void},hook_addr)]
-    hook.callback(hook, RC)
-    ret_addr = hook_addr+length(hook.orig_data)
+    ret = hook.callback(hook, RC)
+    if isa(ret, Deopt)
+        ret_addr = ret.addr
+        extra_instructions = []
+    else
+        ret_addr = hook_addr+length(hook.orig_data)
+        extra_instructions = hook.orig_data
+    end
     addr_bytes = reinterpret(UInt8,[ret_addr])
     resume_data = [
         resume_instructions...,
         # Counteract the pushq %rip in the resume code
         0x48, 0x83, 0xc4, 0x8, # addq $8, %rsp
         # Is this a good idea? Probably not
-        hook.orig_data...,
+        extra_instructions...,
         0x66, 0x68, addr_bytes[7:8]...,
         0x66, 0x68, addr_bytes[5:6]...,
         0x66, 0x68, addr_bytes[3:4]...,
@@ -259,7 +268,6 @@ function hook(callback::Function, addr)
             outs, 1      # OutString
             )
     end
-    @show nbytes
 
     # Record the instructions that were there originally
     dest = pointer_to_array(convert(Ptr{UInt8}, addr), (nbytes,), false)
@@ -277,7 +285,7 @@ end
 function get_function_addr(f, t)
     t = Tuple{typeof(f), Base.to_tuple_type(t).parameters...}
     llvmf = ccall(:jl_get_llvmf, Ptr{Void}, (Any, Any, Bool, Bool), f, t, false, true)
-    @assert llvmf != 0
+    @assert llvmf != C_NULL
     reinterpret(Ptr{Void},ccall(:jl_get_llvm_fptr, UInt64, (Ptr{Void},), llvmf))
 end
 

@@ -37,16 +37,20 @@ function get_ip(cursor)
     ip[]
 end
 
-function rec_backtrace(RC)
+function rec_backtrace(callback, RC)
     cursor = Array(UInt8, 1000)
     ccall(unw_init, Void, (Ptr{Void}, Ptr{Void}), cursor, RC.data)
-    ips = Array(UInt64, 0)
-    push!(ips,get_ip(cursor))
+    callback(cursor)
     while ccall(unw_step, Cint, (Ptr{Void},), cursor) > 0
-        push!(ips,get_ip(cursor))
+        callback(cursor)
     end
-    ips
 end
+
+function rec_backtrace(RC)
+    ips = Array(UInt64, 0)
+    rec_backtrace(cursor->push!(ips,get_ip(cursor)), RC)
+    ips
+end    
 
 function local_RC()
     data = Array(UInt, 100)
