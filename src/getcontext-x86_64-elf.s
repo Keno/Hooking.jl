@@ -37,4 +37,4 @@ movq    %rsi, UC_MCONTEXT_GREGS_RIP(%rsp) # store return address as rip
 movq    %rsp,    %rdi
 pushq   %rsi           # Makes the debugger's life easier
 movq hooking_jl_callback@GOTPCREL(%rip), %rax
-jmpq *%rax
+jmpq *(%rax)

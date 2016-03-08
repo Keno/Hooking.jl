@@ -6,10 +6,10 @@ if OS_NAME == :Darwin
     const unw_get_reg = :unw_get_reg
     const UNW_REG_IP = -1
 else
-    const unw_getcontext = :_Ux86_64_getcontext
-    const unw_init = :_ULx86_64_init_local
-    const unw_step = :_ULx86_64_step
-    const unw_get_reg = :_ULx86_64_get_reg
+    const unw_getcontext = :jl_unw_getcontext
+    const unw_init = :jl_unw_init_local
+    const unw_step = :jl_unw_step
+    const unw_get_reg = :jl_unw_get_reg
     const UNW_X86_64_RAX   =  0
     const UNW_X86_64_RDX   =  1
     const UNW_X86_64_RCX   =  2

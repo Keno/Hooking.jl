@@ -160,6 +160,8 @@ function callback(x::Ptr{Void})
     nothing
 end
 
+const hooking_lib = joinpath(dirname(@__FILE__),"hooking")
+
 function __init__()
     # First initialize the disassembler
     ccall(:LLVMInitializeTarget,Void,())
@@ -171,22 +173,10 @@ function __init__()
     global callback_rwx
     global resume_instructions
     here = dirname(@__FILE__)
-    ccall(:jl_load_object_file,Void,(Ptr{UInt8},),joinpath(here,"elfjump.o"))
     function resume(RC::RegisterContext)
-        llvmcall(
-        (""" declare void @hooking_jl_jumpto(i8*)""",
-        """
-        call void @hooking_jl_jumpto(i8* %0)
-        ret void
-        """),Void,Tuple{Ptr{UInt8}},pointer(RC.data))
+        ccall((:hooking_jl_jumpto, hooking_lib),Void,(Ptr{UInt8},),pointer(RC.data))
     end
-    theresume = eval(:(
-        llvmcall(
-       (""" declare void @hooking_jl_jumpto()""",
-       """
-       %addr = bitcast void ()* @hooking_jl_jumpto to i8*
-       ret i8* %addr
-       """),Ptr{UInt8},Tuple{})))
+    theresume = cglobal((:hooking_jl_jumpto, hooking_lib), Ptr{UInt8})
     resume_instructions = pointer_to_array(convert(Ptr{UInt8}, theresume),
         (resume_length,), false)
     # Allocate an RWX page for the callback return
@@ -205,17 +195,9 @@ function __init__()
         Base.systemerror("mmap", reinterpret(Int, region.addr) == -1)
         region_to_array(region)
     end
-    Base.ccallable(callback,Void,Tuple{Ptr{Void}},:hooking_jl_callback)
-    # Need to guarantee this is compiled after the above is loaded
-    eval(:(ccall(:jl_load_object_file,Void,(Ptr{UInt8},),
-            $(joinpath(here,OS_NAME == :Darwin ? "machohook.o" : "elfhook.o")))))
-    thehook = eval(:(
-        llvmcall(
-       (""" declare void @hooking_jl_savecontext()""",
-       """
-       %addr = bitcast void ()* @hooking_jl_savecontext to i8*
-       ret i8* %addr
-       """),Ptr{UInt8},Tuple{})))
+    ccall((:hooking_jl_set_callback, hooking_lib), Void, (Ptr{Void},),
+        Base.cfunction(callback,Void,Tuple{Ptr{Void}})::Ptr{Void})
+    thehook = cglobal((:hooking_jl_savecontext, hooking_lib), Ptr{UInt8})
 end
 
 # High Level Implementation
