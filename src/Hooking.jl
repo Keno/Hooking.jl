@@ -97,6 +97,7 @@ include("backtraces.jl")
 immutable RegisterContext
     data::Array{UInt}
 end
+Base.copy(RC::RegisterContext) = RegisterContext(copy(RC.data))
 get_ip(RC::RegisterContext) = RC.data[RegisterMap[:rip]]-14
 
 # Actual hooking
@@ -124,7 +125,7 @@ end
         copy(pointer_to_array(convert(Ptr{UInt8}, x), (RC_SIZE,), false))))
     hook_addr = RC.data[RegisterMap[:rip]]-14
     hook = hooks[reinterpret(Ptr{Void},hook_addr)]
-    ret = hook.callback(hook, RC)
+    ret = hook.callback(hook, copy(RC))
     if isa(ret, Deopt)
         ret_addr = ret.addr
         extra_instructions = []

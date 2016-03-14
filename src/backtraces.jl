@@ -29,6 +29,9 @@ else
     const UNW_X86_64_RIP   = 16
     const UC_MCONTEXT_GREGS_RIP = 0xa8
     const UNW_REG_IP       = UNW_X86_64_RIP
+
+    const UC_MCONTEXT_GREGS_RSP = 0xa0
+    const UC_MCONTEXT_GREGS_RIP = 0xa8
 end
 
 function get_ip(cursor)
@@ -37,8 +40,21 @@ function get_ip(cursor)
     ip[]
 end
 
+# The first step is hooking specific, since the frame chain has not yet been
+# established. It's also very simple since all we need to do is pop the return
+# address from the stack and store it as the new IP
+function step_first!(RC)
+    const RIP_INDEX = div(UC_MCONTEXT_GREGS_RIP,sizeof(Ptr{Void})) + 1
+    const RSP_INDEX = div(UC_MCONTEXT_GREGS_RSP,sizeof(Ptr{Void})) + 1
+    RC.data[RIP_INDEX] = unsafe_load(convert(Ptr{UInt64},RC.data[RSP_INDEX]))
+    RC.data[RSP_INDEX] += sizeof(Ptr{Void})
+end
+
 function rec_backtrace(callback, RC)
     cursor = Array(UInt8, 1000)
+    ccall(unw_init, Void, (Ptr{Void}, Ptr{Void}), cursor, RC.data)
+    callback(cursor)
+    step_first!(RC)
     ccall(unw_init, Void, (Ptr{Void}, Ptr{Void}), cursor, RC.data)
     callback(cursor)
     while ccall(unw_step, Cint, (Ptr{Void},), cursor) > 0
