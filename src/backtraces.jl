@@ -34,11 +34,12 @@ else
     const UC_MCONTEXT_GREGS_RIP = 0xa8
 end
 
-function get_ip(cursor)
-    ip = Ref{UInt64}()
-    ccall(unw_get_reg, Cint, (Ptr{Void}, Cint, Ref{UInt64}), cursor, UNW_REG_IP, ip)
-    ip[]
+function get_reg(cursor, reg)
+    res = Ref{UInt64}()
+    ccall(unw_get_reg, Cint, (Ptr{Void}, Cint, Ref{UInt64}), cursor, reg, res)
+    res[]
 end
+get_ip(cursor) = get_reg(cursor, UNW_REG_IP)
 
 # The first step is hooking specific, since the frame chain has not yet been
 # established. It's also very simple since all we need to do is pop the return
