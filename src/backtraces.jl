@@ -27,7 +27,6 @@ else
     const UNW_X86_64_R14   = 14
     const UNW_X86_64_R15   = 15
     const UNW_X86_64_RIP   = 16
-    const UC_MCONTEXT_GREGS_RIP = 0xa8
     const UNW_REG_IP       = UNW_X86_64_RIP
 
     const UC_MCONTEXT_GREGS_RSP = 0xa0
@@ -45,10 +44,8 @@ get_ip(cursor) = get_reg(cursor, UNW_REG_IP)
 # established. It's also very simple since all we need to do is pop the return
 # address from the stack and store it as the new IP
 function step_first!(RC)
-    const RIP_INDEX = div(UC_MCONTEXT_GREGS_RIP,sizeof(Ptr{Void})) + 1
-    const RSP_INDEX = div(UC_MCONTEXT_GREGS_RSP,sizeof(Ptr{Void})) + 1
-    RC.data[RIP_INDEX] = unsafe_load(convert(Ptr{UInt64},RC.data[RSP_INDEX]))
-    RC.data[RSP_INDEX] += sizeof(Ptr{Void})
+    RC.data[RegisterMap[:rip]] = unsafe_load(convert(Ptr{UInt},RC.data[RegisterMap[:rsp]]))
+    RC.data[RegisterMap[:rsp]] += sizeof(Ptr{Void})
 end
 
 function rec_backtrace(callback, RC)
@@ -67,7 +64,7 @@ function rec_backtrace(RC)
     ips = Array(UInt64, 0)
     rec_backtrace(cursor->push!(ips,get_ip(cursor)), RC)
     ips
-end    
+end
 
 function local_RC()
     data = Array(UInt, 100)

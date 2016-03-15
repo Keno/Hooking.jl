@@ -89,6 +89,7 @@ include("backtraces.jl")
 
 @linux_only const RegisterMap = Dict(
     :rip => div(UC_MCONTEXT_GREGS_RIP,sizeof(Ptr{Void}))+1
+    :rsp => div(UC_MCONTEXT_GREGS_RSP,sizeof(Ptr{Void}))+1
 )
 
 @osx_only const RC_SIZE = 20*8
@@ -146,6 +147,7 @@ end
         0x66, 0x68, addr_bytes[1:2]...,
         0xc3
     ]
+    global callback_rwx
     callback_rwx[1:length(resume_data)] = resume_data
 
     # invalidate instruction cache here if ever ported to other
@@ -181,14 +183,14 @@ function __init__()
     resume_instructions = pointer_to_array(convert(Ptr{UInt8}, theresume),
         (resume_length,), false)
     # Allocate an RWX page for the callback return
-    callback_rwx = @osx_only begin
+    @osx_only callback_rwx = begin
         region = mach_check(mach_vm_allocate(4096)...)
         mach_check(mach_vm_protect(region,
             VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE))
         region_to_array(region)
     end
-    callback_rwx = @linux_only begin
-        region = MemoryRegion(ccall(:mmap, Ptr{Void}, 
+    @linux_only callback_rwx = begin
+        region = MemoryRegion(ccall(:mmap, Ptr{Void},
             (Ptr{Void}, Csize_t, Cint, Cint, Cint, Csize_t),
             C_NULL, 4096, PROT_EXEC | PROT_READ | PROT_WRITE,
             Base.Mmap.MAP_ANONYMOUS | Base.Mmap.MAP_PRIVATE,

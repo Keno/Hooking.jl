@@ -1,3 +1,4 @@
+# llvm-mc -filetype=obj jumpto-x86_64-macho.s -o machjump.o
 .text
 .align 4,0x90
 .globl _hooking_jl_jumpto
