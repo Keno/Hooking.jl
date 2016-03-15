@@ -88,7 +88,7 @@ include("backtraces.jl")
 )
 
 @linux_only const RegisterMap = Dict(
-    :rip => div(UC_MCONTEXT_GREGS_RIP,sizeof(Ptr{Void}))+1
+    :rip => div(UC_MCONTEXT_GREGS_RIP,sizeof(Ptr{Void}))+1,
     :rsp => div(UC_MCONTEXT_GREGS_RSP,sizeof(Ptr{Void}))+1
 )
 
