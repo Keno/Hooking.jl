@@ -11,7 +11,7 @@ int $3
 subq    $136,    %rsp
 # Get rax from one above the stack pointer
 # (caller's responsibility to save)
-movq    144(%rsp),%rsi
+movq    144(%rsp),%rax
 movq    %rax,   (%rsp)
 movq    %rbx,  8(%rsp)
 movq    %rcx, 16(%rsp)
