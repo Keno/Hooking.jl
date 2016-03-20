@@ -32,3 +32,8 @@ Hooking.hook(bigfib, Tuple{Int}) do hook, RC
     println("test")
 end
 bigfib(20)
+
+@test !Hooking.mem_validate(0,sizeof(Ptr{Void}))
+x = Array(UInt8,sizeof(Ptr{Void}))
+@test Hooking.mem_validate(pointer(x),sizeof(Ptr{Void}))
+@test length(x) == sizeof(Ptr{Void})

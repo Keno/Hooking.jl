@@ -63,15 +63,37 @@ region_to_array(region::MemoryRegion) =
         length(args) == 1 ? args[1] : nothing
     end
 
+    const VM_REGION_BASIC_INFO_64 = 9
+    const KERN_INVALID_ADDRESS = 1
+    function mem_validate(addr, length)
+        x = Array(UInt8,2)
+        addr_info = Ref{Ptr{Void}}(addr)
+        size_info = Ref{Csize_t}(length)
+        flavor = VM_REGION_BASIC_INFO_64
+        buf = Array(UInt,1000)
+        buf_size = Ref{Csize_t}(1000)
+        object_name = Ref{Ptr{Void}}(C_NULL)
+        ret = ccall(:mach_vm_region, KernReturn, (Ptr{Void}, Ptr{Ptr{Void}}, Ptr{Csize_t}, Csize_t, Ptr{Void}, Ptr{Csize_t}, Ptr{Void}),
+            mach_task_self(), addr_info, size_info, flavor, buf, buf_size, object_name)
+        ret == 0 &&
+            addr_info[] <= Ptr{Void}(addr) &&
+            Ptr{Void}(addr + length) < (addr_info[] + size_info[])
+    end
+
 end
 
 @linux_only begin
     to_page(addr, size) = (@assert size <= 4096;
         MemoryRegion(addr-(reinterpret(UInt, addr)%4096),1))
-        
+
     mprotect(region, flags) = ccall(:mprotect, Cint,
         (Ptr{Void}, Csize_t, Cint), region.addr, region.size, flags)
-        
+
+    function mem_validate(addr, length)
+        x = Array(UInt8,2)
+        ccall(:mincore, Cint, (Ptr{Void}, Csize_t, Ptr{UInt8}), addr, length, x) == 0
+    end
+
     const PROT_READ	 =  0x1
     const PROT_WRITE =  0x2
     const PROT_EXEC	 =  0x4
