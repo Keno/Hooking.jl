@@ -120,6 +120,7 @@ include("backtraces.jl")
 immutable RegisterContext
     data::Array{UInt}
 end
+RegisterContext() = RegisterContext(Array(UInt,RC_SIZE))
 Base.copy(RC::RegisterContext) = RegisterContext(copy(RC.data))
 get_ip(RC::RegisterContext) = RC.data[RegisterMap[:rip]]-14
 
@@ -188,11 +189,6 @@ end
 const hooking_lib = joinpath(dirname(@__FILE__),"hooking")
 
 function __init__()
-    # First initialize the disassembler
-    ccall(:LLVMInitializeTarget,Void,())
-    ccall(:LLVMInitializeX86Target,Void,())
-    ccall(:LLVMInitializeX86Disassembler,Void,())
-
     global resume
     global thehook
     global callback_rwx
@@ -237,7 +233,7 @@ function allow_writing(f, region)
     # On OS X, make sure that the page is mapped as COW
     @osx_only mach_check(
         mach_vm_protect(region, VM_PROT_READ | VM_PROT_WRITE))
-    @linux_only mprotect(region, PROT_READ | PROT_WRITE | PROT_EXEC) 
+    @linux_only mprotect(region, PROT_READ | PROT_WRITE | PROT_EXEC)
     f()
     @osx_only mach_check(
         mach_vm_protect(region, VM_PROT_EXECUTE | VM_PROT_READ))
@@ -249,7 +245,7 @@ function hook(callback::Function, addr)
     # Ideally we would also check for uses of rip and branches here and error
     # out if any are found, but for now we don't need to
     triple = "x86_64-apple-darwin15.0.0"
-    DC = ccall(:LLVMCreateDisasm, Ptr{Void},
+    DC = ccall(:jl_LLVMCreateDisasm, Ptr{Void},
         (Ptr{UInt8},Ptr{Void},Cint,Ptr{Void},Ptr{Void}),
         triple, C_NULL, 0, C_NULL, C_NULL)
     @assert DC != C_NULL
@@ -266,7 +262,7 @@ function hook(callback::Function, addr)
     nbytes = 0
     while nbytes < length(hook_asm_template)
         outs = Ref{UInt8}()
-        nbytes += ccall(:LLVMDisasmInstruction, Csize_t,
+        nbytes += ccall(:jl_LLVMDisasmInstruction, Csize_t,
             (Ptr{Void}, Ptr{UInt8}, Csize_t, UInt64, Ptr{UInt8}, Csize_t),
             DC,          # Disassembler
             addr+nbytes, # bytes
