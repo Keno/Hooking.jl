@@ -91,7 +91,8 @@ end
 
     function mem_validate(addr, length)
         x = Array(UInt8,2)
-        ccall(:mincore, Cint, (Ptr{Void}, Csize_t, Ptr{UInt8}), addr, length, x) == 0
+        ret = ccall(:mincore, Cint, (Ptr{Void}, Csize_t, Ptr{UInt8}), to_page(addr, length).addr, length, x)
+        ret == 0
     end
 
     const PROT_READ	 =  0x1
